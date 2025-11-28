@@ -1,0 +1,55 @@
+{
+  "name": "@hyperstream-sdk/client",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "bun run clean && bunx tsc -p tsconfig.build.json",
+    "dev": "bun run --watch src/index.ts",
+    "typecheck": "bunx tsc --noEmit",
+    "test": "bun test"
+  },
+  "keywords": [
+    "hyperstream",
+    "sdk",
+    "defi",
+    "cross-chain"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tvl-labs/hyperstream-sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tvl-labs/hyperstream-sdk/issues"
+  },
+  "homepage": "https://github.com/tvl-labs/hyperstream-sdk#readme",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.5.0",
+    "viem": "^2.9.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0",
+    "viem": "^2.9.0"
+  }
+}
