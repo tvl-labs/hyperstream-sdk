@@ -322,7 +322,8 @@ If you prefer calling the REST API directly.
 ### POST /v1/deposits/submit
 
 - **Purpose**: submit a deposit transaction record to speed up UX feedback loops and debugging.
-- **Body**
+- **Body** `SubmitDepositRequest`
+- **Example**
 
 ```json
 {
