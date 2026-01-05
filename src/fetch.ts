@@ -30,7 +30,7 @@ export class Fetch {
 
   private requestInterceptors: RequestInterceptor[] = [];
   private responseInterceptors: ResponseInterceptor[] = [];
-  private readonly fetchImpl: FetchLike;
+  protected readonly fetchImpl: FetchLike;
 
   constructor(config?: FetchConfig) {
     this.baseURL = config?.baseURL;

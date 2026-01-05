@@ -3,7 +3,8 @@ import { createHyperstreamClient } from "../src/index";
 import {
   TradeType,
   type FetchLike,
-  type QuoteResponse,
+  type QuotesResponse,
+  type QuoteStreamItem,
   type TokenSearchResponse,
 } from "../src/types";
 import type { Address } from "viem";
@@ -26,7 +27,7 @@ describe("HyperstreamClient", () => {
       headers: { "x-app-id": "sdk-tests" },
     });
 
-    const quote = await client.quotes({
+    const response = await client.quotes({
       fromAddress: "0x0000000000000000000000000000000000000001" as Address,
       tradeType: TradeType.ExactInput,
       fromChainId: 42161,
@@ -36,7 +37,8 @@ describe("HyperstreamClient", () => {
       amount: "0x10",
     });
 
-    expect(quote.intentId).toBe("intent-123");
+    expect(response.quoteId).toBe("quote-123");
+    expect(response.routes[0]?.routeId).toBe("Across");
     expect(mockFetch.calls.length).toBe(1);
     expect(mockFetch.calls[0]?.input.toString()).toBe(`${baseUrl}/v1/quotes`);
     expect(mockFetch.calls[0]?.init?.method).toBe("POST");
@@ -46,11 +48,11 @@ describe("HyperstreamClient", () => {
     });
   });
 
-  it("returns null when getToken receives a 404", async () => {
+  it("returns null when getToken receives no matches", async () => {
     const mockFetch = createMockFetch([
       {
-        status: 404,
-        body: { message: "NotFound" },
+        status: 200,
+        body: createTokenSearchResponse({ tokens: [], cursor: undefined }),
       },
     ]);
 
@@ -113,13 +115,39 @@ describe("HyperstreamClient", () => {
 
     expect(pages).toEqual([1, 1]);
     expect(mockFetch.calls).toHaveLength(2);
+    expect(mockFetch.calls[0]?.init?.method).toBe("GET");
   });
 
-  it("returns true when submitDeposit is accepted", async () => {
+  it("streams quotes over NDJSON", async () => {
+    const streamItems: QuoteStreamItem[] = [
+      {
+        quoteId: "quote-123",
+        routeId: "Across",
+        type: "external-intent-router",
+        quote: {
+          amountIn: "1",
+          amountOut: "2",
+          expectedDurationSeconds: 30,
+          validBefore: 1234,
+        },
+      },
+      {
+        quoteId: "quote-123",
+        routeId: "Native",
+        type: "native-filler",
+        quote: {
+          amountIn: "3",
+          amountOut: "4",
+          expectedDurationSeconds: 45,
+          validBefore: 1235,
+        },
+      },
+    ];
     const mockFetch = createMockFetch([
       {
         status: 200,
-        body: { status: "accepted" },
+        rawBody: streamItems.map((item) => JSON.stringify(item)).join("\n"),
+        headers: { "content-type": "application/x-ndjson" },
       },
     ]);
 
@@ -128,14 +156,45 @@ describe("HyperstreamClient", () => {
       fetch: mockFetch,
     });
 
-    const accepted = await client.submitDeposit({
-      intentId: "0x01",
-      srcChainId: 42161,
-      txHash: "0x02",
-      amountIn: "0x10",
+    const received: QuoteStreamItem[] = [];
+    for await (const item of client.streamQuotes({
+      fromAddress: "0x1",
+      tradeType: TradeType.ExactInput,
+      fromChainId: 1,
+      fromToken: "0x2",
+      toChainId: 2,
+      toToken: "0x3",
+      amount: "10",
+    })) {
+      received.push(item);
+    }
+
+    expect(received).toEqual(streamItems);
+    expect(mockFetch.calls[0]?.input.toString()).toBe(
+      `${baseUrl}/v1/quotes?mode=stream`
+    );
+  });
+
+  it("returns the orderId when submitDeposit succeeds", async () => {
+    const mockFetch = createMockFetch([
+      {
+        status: 200,
+        body: { orderId: "order-1" },
+      },
+    ]);
+
+    const client = createHyperstreamClient({
+      baseUrl,
+      fetch: mockFetch,
     });
 
-    expect(accepted).toBe(true);
+    const result = await client.submitDeposit({
+      quoteId: "quote-123",
+      routeId: "Across",
+      txHash: "0x02",
+    });
+
+    expect(result.orderId).toBe("order-1");
   });
 
   it("exposes the HyperstreamApiError for non-404 failures", async () => {
@@ -160,6 +219,7 @@ describe("HyperstreamClient", () => {
 interface MockResponse {
   status: number;
   body?: unknown;
+  rawBody?: string;
   headers?: Record<string, string>;
 }
 
@@ -181,18 +241,21 @@ function createMockFetch(responses: MockResponse[]): MockFetch {
         throw new Error("No mock response left for fetch call");
       }
       calls.push({ input, init });
-      return new Response(
-        responseConfig.body !== undefined
+      const body =
+        responseConfig.rawBody !== undefined
+          ? responseConfig.rawBody
+          : responseConfig.body !== undefined
           ? JSON.stringify(responseConfig.body)
-          : undefined,
-        {
-          status: responseConfig.status,
-          headers: {
-            "content-type": "application/json",
-            ...(responseConfig.headers ?? {}),
-          },
-        }
-      );
+          : undefined;
+      return new Response(body, {
+        status: responseConfig.status,
+        headers: {
+          ...(responseConfig.rawBody === undefined
+            ? { "content-type": "application/json" }
+            : {}),
+          ...(responseConfig.headers ?? {}),
+        },
+      });
     },
     { calls }
   );
@@ -200,38 +263,21 @@ function createMockFetch(responses: MockResponse[]): MockFetch {
   return fetchImpl;
 }
 
-function createQuoteResponse(): QuoteResponse {
+function createQuoteResponse(): QuotesResponse {
   return {
-    tradeType: TradeType.ExactInput,
-    fromChainId: 42161,
-    fromToken: "0x0000000000000000000000000000000000000002",
-    toChainId: 8453,
-    toToken: "0x0000000000000000000000000000000000000003",
-    amountIn: "0x10",
-    amountOut: "0x20",
-    expectedDurationSeconds: 120,
-    validBefore: new Date().toISOString(),
-    intentId: "intent-123",
-    intent: {
-      author: "0x0000000000000000000000000000000000009999",
-      validBefore: "0x1234",
-      nonce: "0x01",
-      srcMToken: "0x5555",
-      srcAmount: "0x10",
-      destinationChainId: 8453,
-      nativeOutcome: "0x05",
-      outcomeToken: "0x0000000000000000000000000000000000000004",
-      outcomeAmount: "0x20",
-    },
-    deposit: {
-      kind: "CONTRACT_CALL",
-      approvals: [
-        {
-          method: "eth_sendTransaction",
-          params: [{}],
+    quoteId: "quote-123",
+    routes: [
+      {
+        routeId: "Across",
+        type: "external-intent-router",
+        quote: {
+          amountIn: "0x10",
+          amountOut: "0x20",
+          expectedDurationSeconds: 120,
+          validBefore: Math.floor(Date.now() / 1000) + 60,
         },
-      ],
-    },
+      },
+    ],
   };
 }
 

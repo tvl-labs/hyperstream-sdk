@@ -5,26 +5,178 @@
 Core TypeScript contracts shared by the SDK and REST API so integrators can rely on strong typing end to end.
 
 ```ts
-import { Chain, Hex, Address } from "viem";
+import type { Address, Hex } from "viem";
 
 interface HyperstreamClient {
-  quotes(request: QuoteRequest): Promise<QuoteResponse>;
+  quotes(request: QuoteRequest): Promise<QuotesResponse>;
+  streamQuotes(request: QuoteRequest): AsyncGenerator<QuoteStreamItem>;
 
-  getToken(chainId: number, address: Address): Promise<Token | null>;
-  getToken(chainId: number, symbol: string): Promise<Token | null>;
+  buildDeposit(request: BuildDepositRequest): Promise<Deposit>;
+  submitDeposit(request: SubmitDepositRequest): Promise<SubmitDepositResponse>;
+
+  getToken(chainId: number, identifier: string): Promise<Token | null>;
 
   searchTokens(request: SearchTokensRequest): AsyncGenerator<Token[]>;
+  searchTokensPage(request: SearchTokensRequest): Promise<TokenSearchResponse>;
+  searchTokensWithAdapters(
+    request: TokenSearchAdaptersRequest
+  ): Promise<Token[]>;
+
+  autocompleteTokens(
+    keyword: string,
+    query?: TokenAutocompleteQuery
+  ): Promise<TokenAutocompleteResponse>;
+  getTokenBalances(
+    address: string,
+    query?: TokenBalancesQuery
+  ): Promise<Token[]>;
+  getTopTokens(query?: TopTokensQuery): Promise<Token[]>;
+  getMTokens(): Promise<MToken[]>;
 
   getChains(): Promise<Chain[]>;
+  getArcadiaConfig(): Promise<ArcadiaConfig>;
+  getVaults(): Promise<Vault[]>;
 
-  getIntentStatus(intent: Hex): Promise<IntentStatus>;
-
+  getIntentStatus(intentId: Hex): Promise<IntentDetailsResponse>;
   getIntentByDeposit(
     chainId: number,
-    txHash: string
-  ): Promise<IntentDeposit | null>;
+    txHash: Hex
+  ): Promise<IntentDetailsResponse | null>;
+  getIntentsByAuthor(
+    author: Address,
+    query?: IntentsByAuthorQuery
+  ): Promise<IntentsByAuthorResponse>;
 
-  submitDeposit(request: SubmitDepositRequest): Promise<boolean>;
+  getOrders(address: Address, query?: OrdersQuery): Promise<OrdersResponse>;
+}
+
+type FillerType =
+  | "native-filler"
+  | "external-intent-router"
+  | "liquidity-router"
+  | "aggregator-router";
+
+export enum TradeType {
+  ExactInput = "EXACT_INPUT",
+  ExactOutput = "EXACT_OUTPUT",
+}
+
+interface QuoteRequest {
+  fromAddress: string;
+  tradeType: TradeType;
+  fromChainId: number;
+  fromToken: string;
+  toChainId: number;
+  toToken: string;
+  amount: Hex | string;
+  recipient?: string;
+  refundTo?: string;
+}
+
+interface QuoteResult {
+  amountIn: string;
+  amountOut: string;
+  expectedDurationSeconds: number;
+  validBefore: number; // unix timestamp (seconds)
+}
+
+interface QuoteRoute {
+  routeId: string;
+  type: FillerType;
+  quote: QuoteResult;
+}
+
+interface QuotesResponse {
+  quoteId: string;
+  routes: QuoteRoute[];
+}
+
+type QuoteStreamItem = QuoteRoute & { quoteId: string };
+
+type Approval =
+  | {
+      type: "eip1193_request";
+      request:
+        | { method: "wallet_switchEthereumChain"; params: [{ chainId: Hex }] }
+        | {
+            method: "eth_sendTransaction";
+            params: [EthSendTransactionParams];
+          };
+      waitForReceipt?: boolean;
+      deposit?: boolean;
+    }
+  | {
+      type: "solana_sendTransaction";
+      transaction: string;
+    };
+
+interface ContractCallDeposit {
+  kind: "CONTRACT_CALL";
+  approvals?: Approval[];
+}
+
+type Deposit = ContractCallDeposit;
+
+interface BuildDepositRequest {
+  from: string;
+  quoteId: string;
+  routeId: string;
+}
+
+interface SubmitDepositRequest {
+  quoteId: string;
+  routeId: string;
+  txHash: Hex;
+}
+
+interface SubmitDepositResponse {
+  orderId: string;
+}
+
+interface SearchTokensRequest {
+  q?: string;
+  chainIds?: number[];
+  limit?: number;
+  cursor?: number;
+  addresses?: string[];
+  symbols?: string[];
+}
+
+interface Token {
+  address: string;
+  chainId: number;
+  name: string;
+  symbol: string;
+  decimals: number;
+  logoURI?: string;
+  extensions?: TokenExtensions;
+}
+
+interface TokenExtensions {
+  balance?: string;
+  price?: { usd: string };
+  change?: string;
+  spokeToken?: {
+    chainId: number;
+    address: string;
+    symbol: string;
+  };
+}
+
+interface TokenSearchResponse {
+  data: Token[];
+  cursor?: number;
+}
+
+interface TokenSearchAdaptersRequest {
+  q: string;
+  chainIds?: number[];
+}
+
+interface TokenAutocompleteResponse {
+  data: TokenAutocompleteItem[];
+  parsed: TokenAutocompleteParsed;
+  nextSlots: SemanticSlot[];
 }
 
 enum IntentState {
@@ -38,127 +190,26 @@ enum IntentState {
   Error = "Error",
 }
 
-export enum TradeType {
-  ExactInput = "EXACT_INPUT",
-  ExactOutput = "EXACT_OUTPUT",
-}
-
-interface QuoteRequest {
-  fromAddress: Address;
-  tradeType: TradeType;
-  fromChainId: number;
-  fromToken: Address;
-  toChainId: number;
-  toToken: Address;
-  amount: Hex | string;
-}
-
-interface QuoteResponse {
-  tradeType: TradeType;
-
-  fromChainId: number;
-  fromToken: string;
-  toChainId: number;
-  toToken: string;
-
-  amountIn: Hex;
-  amountOut: Hex;
-
-  expectedDurationSeconds: number;
-  validBefore: string;
-
-  intentId: string;
-  intent: CrossChainIntent;
-
-  deposit?: ContractCallDeposit;
-}
-
-interface CrossChainIntent {
-  author: Address;
-  validBefore: Hex;
-  nonce: Hex;
-  srcMToken: Address;
-  srcAmount: Hex;
-  destinationChainId: number;
-  nativeOutcome: Hex;
-  outcomeToken: Address;
-  outcomeAmount: Hex;
-}
-
-interface SearchTokensRequest {
-  q: string; // query by symbol, name, or token address
-  chainIds?: number[];
-  limit?: number;
-  cursor?: number;
-  addresses?: Address[];
-  symbols?: string[];
-}
-
-interface SubmitDepositRequest {
-  intentId: Hex;
-  srcChainId: number;
-  txHash: Hex;
-  amountIn: Hex;
-}
-
-interface ContractCallDeposit {
-  kind: "CONTRACT_CALL";
-  approvals?: Array<{
-    method: string;
-    params: unknown[];
-  }>;
-}
-
-interface Token {
-  address: Address;
-  chainId: number;
-  name: string;
-  symbol: string;
-  decimals: number;
-  logoURI?: string;
-  extensions?: unknown;
-}
-
-interface TokenSearchResponse {
-  data: Token[];
-  cursor?: number;
-}
-
-interface IntentDeposit {
-  chainId: number;
-  txHash: Hex;
+interface IntentDetailsResponse {
   intentId: Hex;
   state: IntentState;
+  fromChainId: number;
+  toChainId: number;
+  author: Address;
+  fromToken: Address;
+  toToken: Address;
+  srcAmount: string;
+  destAmount: string;
+  createdAt: string;
+  openedAt: string | null;
+  filledAt: string | null;
+  settledAt: string | null;
+  deposits: IntentDepositResponse[];
 }
 
-interface IntentStatus {
-  intent: {
-    raw: CrossChainIntent;
-    state: IntentState;
-  };
-  deposits: Array<{
-    srcChainId: number;
-    txHash: string;
-    amountIn: string;
-    confirmedAt: string;
-  }>;
-  fills?: Array<{
-    destinationChainId: number;
-    txHash: string;
-    destTokenAmountFilled: string;
-    destNativeAmountSent: string;
-    filler: string;
-    timestamp: string;
-  }>;
-  refunds?: Array<{
-    txHash: Hex;
-    refundAmount: Hex;
-    timestamp: string;
-    recipient: Address;
-  }>;
-  openedAt: string;
-  filledAt: string;
-  settledAt: string;
+interface OrdersResponse {
+  data: Order[];
+  cursor?: number;
 }
 ```
 
@@ -178,13 +229,18 @@ const client = createHyperstreamClient({
 
 ### Methods overview
 
-- `quotes(request)` — fetches a cross-chain quote plus the contract call plan, returns a `QuoteResponse`.
-- `getToken(chainId, address | symbol)` — fetches a single token by address or symbol.
-- `searchTokens(request)` — fuzzy token search with keyword/chain/address filters. Returns `AsyncGenerator<Token[]>`, each page being a batch of tokens.
-- `getChains()` — lists all supported chains.
-- `getIntentStatus(intentId)` — fetches full intent status.
-- `getIntentByDeposit(chainId, txHash)` — looks up an intent by deposit transaction.
-- `submitDeposit(request)` — submits an off-chain record of a deposit transaction to speed up UX feedback loops.
+- `quotes(request)` — returns a `QuotesResponse` containing every available route.
+- `streamQuotes(request)` — NDJSON streaming variant that yields `QuoteStreamItem`s as the fillers respond.
+- `buildDeposit({ from, quoteId, routeId })` — renders the wallet plan for a specific route.
+- `submitDeposit({ quoteId, routeId, txHash })` — records a deposit and returns `{ orderId }` for optimistic UIs.
+- `getToken(chainId, identifier)` — convenience helper that wraps `searchTokens`.
+- `searchTokens(request)` / `searchTokensPage(request)` — DB-backed token search with cursor pagination.
+- `searchTokensWithAdapters({ q, chainIds? })` — semantic / adapter-backed token search (OKX, intents DB, etc.).
+- `autocompleteTokens(keyword, query?)` — semantic autocomplete with parsed slots (`amount`, `chain`, etc.).
+- `getTokenBalances`, `getTopTokens`, `getMTokens` — portfolio surfaces wired to Hyperstream + OKX providers.
+- `getChains`, `getArcadiaConfig`, `getVaults` — configuration endpoints for supported chains and deployed contracts.
+- `getIntentStatus`, `getIntentByDeposit`, `getIntentsByAuthor` — full intent lifecycle accessors.
+- `getOrders(address, query?)` — Hyperstream order history with cursor pagination.
 
 ### searchTokens pagination example
 
@@ -199,16 +255,17 @@ for await (const page of client.searchTokens(params)) {
 }
 ```
 
-Pagination uses cursors under the hood. The SDK automatically injects the `cursor` returned from the previous page into the next request, so iterating with `for await ... of` streams the full result set. If you want manual control (for a "Load more" button, for example) you can stop iterating at any time.
+Pagination uses cursors under the hood. The SDK automatically injects the `cursor` returned from the previous page into the next request, so iterating with `for await ... of` streams the full result set. If you want manual control (for a "Load more" button, for example) you can either stop iterating or call `client.searchTokensPage(params)` directly to retrieve a single page.
 
 ### Intent queries
 
 ```ts
 const status = await client.getIntentStatus(intentId);
+console.log(status.state, status.deposits.length);
 
 const intent = await client.getIntentByDeposit(42161, "0xabc...");
 if (intent) {
-  console.log(intent.intent.state, intent.deposits.length);
+  console.log(intent.state, intent.deposits.length);
 }
 ```
 
@@ -223,7 +280,7 @@ const walletClient = createWalletClient({
   /* ... */
 });
 
-const quote = await client.quotes({
+const quotes = await client.quotes({
   fromAddress: walletClient.account.address,
   tradeType: "EXACT_INPUT",
   fromChainId: 42161,
@@ -233,10 +290,20 @@ const quote = await client.quotes({
   amount: parseUnits("100", 6).toString(),
 });
 
+const bestRoute = quotes.routes[0];
+if (!bestRoute) {
+  throw new Error("No routes available");
+}
+
+const depositPlan = await client.buildDeposit({
+  from: walletClient.account.address,
+  quoteId: quotes.quoteId,
+  routeId: bestRoute.routeId,
+});
+
 let depositTxHash: Hex | undefined;
 
-for (const approval of quote.deposit?.approvals || []) {
-  // request already includes every RPC argument
+for (const approval of depositPlan.approvals || []) {
   const result = await walletClient.request(approval);
   if (!depositTxHash && typeof result === "string") {
     depositTxHash = result as Hex;
@@ -244,23 +311,24 @@ for (const approval of quote.deposit?.approvals || []) {
 }
 
 if (depositTxHash) {
-  await client.submitDeposit({
-    intentId: quote.intentId as Hex,
-    srcChainId: quote.fromChainId,
+  const { orderId } = await client.submitDeposit({
+    quoteId: quotes.quoteId,
+    routeId: bestRoute.routeId,
     txHash: depositTxHash,
-    amountIn: quote.amountIn,
   });
+  console.log("hyperstream order queued", orderId);
 }
 ```
 
-`QuoteResponse.deposit?.approvals` lists every required on-chain action (allowances, permits, final deposits, etc.) in order, so you can either surface them step-by-step or fire them all through a wallet UX.
+`buildDeposit` returns every approval/transaction in the exact order required (allowances, permits, final deposits, etc.), so you can either surface them step-by-step or fire them all through a wallet UX.
 
-### QuoteResponse quick reference
+### QuotesResponse quick reference
 
-- `intentId` — use this to poll `getIntentStatus` or correlate webhooks.
-- `expectedDurationSeconds` — SLA-style estimate of settlement time.
-- `validBefore` — expiry timestamp; request a fresh quote if it lapses.
-- `deposit.approvals` — ordered JSON-RPC payloads (`eth_sendTransaction`, `eth_signTypedData_v4`, etc.).
+- `quoteId` — required for `buildDeposit` and `submitDeposit` calls.
+- `routes[].routeId` — unique filler identifier (Across, Native, Uniswap Gateway, etc.).
+- `routes[].type` — whether the route is native, external intent router, liquidity router, etc.
+- `routes[].quote.expectedDurationSeconds` — SLA-style estimate of settlement time.
+- `routes[].quote.validBefore` — expiry timestamp (seconds). Request a fresh quote if it lapses.
 
 ## API Overview
 
@@ -268,41 +336,24 @@ If you prefer calling the REST API directly.
 
 ### POST /v1/quotes
 
-- **Purpose**: return an intent, contract call data, and signing plan for a cross-chain swap.
+- **Purpose**: return a `quoteId` plus every available route (and optional NDJSON stream of `QuoteStreamItem`s).
 - **Body**: `QuoteRequest`
-- **Example**
+- **Query**:
+  - `mode=stream` — switches the response to `application/x-ndjson`
+- **Response**: `QuotesResponse`
+- **Errors**: `ValidationException`, `CannotFillException`, `NotSupportedTokenException`, `NotSupportedChainException`, `RateLimitException`
 
-```json
-{
-  "fromAddress": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
-  "tradeType": "EXACT_INPUT",
-  "fromChainId": 11155111,
-  "fromToken": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-  "toChainId": 11155111,
-  "toToken": "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
-  "amount": "100000"
-}
-```
+### GET /v1/tokens
 
-- **Response**: `QuoteResponse`, including `deposit.approvals` for wallet execution.
-- **Error codes**: `CannotFillException`, `NotSupportedTokenException`, `NotSupportedChainException`, `RateLimitException`
-
-### POST /v1/tokens/search
-
-- **Purpose**: fuzzy token search with cursor pagination.
-- **Body**: `SearchTokensRequest`
-- **Example**
-
-```json
-{
-  "q": "USDC",
-  "chainIds": [42161, 8453],
-  "limit": 50,
-  "cursor": 150
-}
-```
-
+- **Purpose**: fuzzy token search with cursor pagination (database-backed).
+- **Query params**:
+  - `q?`, `chainIds?`, `addresses?`, `symbols?`, `limit?`, `cursor?`
 - **Response**: `TokenSearchResponse` (`data` + `cursor`). When `cursor` is `undefined`, pagination is complete.
+
+### GET /v1/tokens/search
+
+- **Purpose**: adapter/semantic token search (`q` required, optional `chainIds[]` filter).
+- **Response**: `{ "data": Token[] }`
 
 ### GET /v1/chains
 
@@ -312,26 +363,30 @@ If you prefer calling the REST API directly.
 ### GET /v1/intent/:intentId
 
 - **Purpose**: fetch the full record for a specific intent.
-- **Response**: `IntentStatus`; returns `404` if not found.
+- **Response**: `IntentDetailsResponse`; returns `404` if not found.
 
-### GET /v1/intent/by-deposit/:chainId/:txHash
+### GET /v1/intent/deposit/:chainId/:txHash
 
 - **Purpose**: look up an intent using its deposit transaction.
-- **Response**: `IntentDeposit`; returns `404` if not found.
+- **Response**: `IntentDetailsResponse`; returns `404` if not found.
 
-### POST /v1/deposits/submit
+### POST /v1/deposit/build
 
-- **Purpose**: submit a deposit transaction record to speed up UX feedback loops and debugging.
+- **Purpose**: expand a `{ quoteId, routeId }` into wallet-ready approvals and transactions.
+- **Body**: `{ "from": "0x...", "quoteId": "...", "routeId": "Across" }`
+- **Response**: `Deposit`
+
+### PUT /v1/deposit/submit
+
+- **Purpose**: register a deposit transaction and obtain a Hyperstream order id.
 - **Body** `SubmitDepositRequest`
-- **Example**
 
 ```json
 {
-  "intentId": "0x1234...",
-  "srcChainId": 42161,
-  "txHash": "0xabc...",
-  "amountIn": "1000000"
+  "quoteId": "quote-123",
+  "routeId": "Across",
+  "txHash": "0xabc..."
 }
 ```
 
-- **Response**: `200 OK` with `{ "status": "accepted" }` (empty body reserved for future metadata). Duplicate submissions are idempotent.
+- **Response**: `{ "orderId": "order_123" }`
